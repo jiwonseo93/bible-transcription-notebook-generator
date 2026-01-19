@@ -16,8 +16,10 @@ This is Stage 1 of the project, featuring:
 
 - Next.js 14 (App Router)
 - TypeScript
-- Playwright (for HTML to PDF conversion)
+- puppeteer-core + @sparticuz/chromium (for HTML to PDF conversion)
 - Noto Serif fonts (English and Korean)
+
+**Note:** PDF rendering uses puppeteer-core + @sparticuz/chromium for Vercel serverless compatibility. Local development uses the full puppeteer package which includes Chromium.
 
 ## Getting Started
 
@@ -26,10 +28,11 @@ This is Stage 1 of the project, featuring:
 npm install
 ```
 
-2. Install Playwright browsers:
+2. For local development, ensure puppeteer is installed (included in devDependencies):
 ```bash
-npx playwright install chromium
+npm install
 ```
+Note: puppeteer will automatically download Chromium on first use.
 
 3. Run the development server:
 ```bash
@@ -75,7 +78,11 @@ src/
 
 ### PDF Generation
 
-The PDF is generated using Playwright's headless browser to ensure crisp typography and print fidelity. Fonts are embedded as base64 data URIs for reliable rendering.
+The PDF is generated using Puppeteer with Chromium to ensure crisp typography and print fidelity. 
+- **Local development**: Uses the full `puppeteer` package (includes Chromium)
+- **Vercel deployment**: Uses `puppeteer-core` + `@sparticuz/chromium` for serverless compatibility
+
+Fonts are embedded as base64 data URIs for reliable rendering. PDF page size is explicitly set to 7.75in × 10.75in.
 
 ## Next Steps (Future Stages)
 
