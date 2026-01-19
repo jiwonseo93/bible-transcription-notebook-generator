@@ -43,7 +43,6 @@ export async function POST(request: NextRequest) {
       if (isServerless) {
         // Serverless environment (Vercel) - use @sparticuz/chromium
         console.log("Using serverless Chromium on Vercel");
-        chromium.setGraphicsMode(false);
         const executablePath = await chromium.executablePath();
         
         browser = await puppeteer.launch({
