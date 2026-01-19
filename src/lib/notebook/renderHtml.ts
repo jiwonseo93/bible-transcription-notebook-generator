@@ -1,5 +1,5 @@
 import { NotebookRequest, Template } from "./types";
-import { getTemplate } from "./templates";
+import { getTemplate, ptToIn } from "./templates";
 import path from "path";
 import fs from "fs";
 
@@ -14,51 +14,76 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (m) => map[m]);
 }
 
-function renderWritingPage(template: Template): string {
+function renderWritingPage(template: Template, isDebug: boolean): string {
   const { writingPage } = template;
-  const { pageSize } = template;
-
-  // Build SVG for the ruled lines
+  
+  // Convert all measurements to inches
+  const lineStartX = ptToIn(writingPage.lineStartX);
+  const lineEndX = ptToIn(writingPage.lineEndX);
+  const marginX = ptToIn(writingPage.marginLineX);
+  const firstLineY = ptToIn(writingPage.firstLineTopOffset);
+  const spacingY = ptToIn(writingPage.lineSpacing);
+  const horizontalStrokeWidth = ptToIn(writingPage.lineStrokeWidth);
+  const verticalStrokeWidth = ptToIn(writingPage.marginLineStrokeWidth);
+  
+  // Calculate vertical margin line bounds (ends at last ruled line)
+  const lastLineY = firstLineY + (writingPage.lineCount - 1) * spacingY;
+  
+  // Build SVG for the ruled lines using inch-based viewBox
   const lines: string[] = [];
   for (let i = 0; i < writingPage.lineCount; i++) {
-    const y = writingPage.firstLineTopOffset + i * writingPage.lineSpacing;
+    const y = firstLineY + i * spacingY;
     lines.push(
-      `<line x1="${writingPage.lineStartX}" y1="${y}" x2="${writingPage.lineEndX}" y2="${y}" stroke="#000" stroke-width="${writingPage.lineStrokeWidth}" />`
+      `<line x1="${lineStartX}" y1="${y}" x2="${lineEndX}" y2="${y}" stroke="#666" stroke-width="${horizontalStrokeWidth}" />`
     );
   }
-
-  // Vertical margin line
-  const marginLine = `<line x1="${writingPage.marginLineX}" y1="0" x2="${writingPage.marginLineX}" y2="${pageSize.heightPt}" stroke="#000" stroke-width="${writingPage.marginLineStrokeWidth}" />`;
-
-  const svg = `<svg width="${pageSize.widthPt}pt" height="${pageSize.heightPt}pt" xmlns="http://www.w3.org/2000/svg">
+  
+  // Vertical margin line (ends at last ruled line, not full page)
+  const marginLine = `<line x1="${marginX}" y1="${firstLineY}" x2="${marginX}" y2="${lastLineY}" stroke="#666" stroke-width="${verticalStrokeWidth}" />`;
+  
+  // Page dimensions in inches
+  const pageWidthIn = 7.75;
+  const pageHeightIn = 10.75;
+  
+  const svg = `<svg width="${pageWidthIn}in" height="${pageHeightIn}in" viewBox="0 0 ${pageWidthIn} ${pageHeightIn}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
     ${lines.join("\n    ")}
     ${marginLine}
   </svg>`;
-
+  
+  const debugStyle = isDebug ? 'outline: 1px solid red;' : '';
+  
   return `<section class="page">
-    <div class="writing-page">
+    <div class="writing-page" style="${debugStyle}">
       ${svg}
     </div>
   </section>`;
 }
 
-function renderScripturePage(content: { paragraphs: string[] }, template: Template, language: string): string {
-  const { scripturePage } = template;
+function renderScripturePage(content: { paragraphs: string[] }, template: Template, language: string, chapterNumber: number, isDebug: boolean): string {
   const fontFamily = language === "ko" ? "var(--font-noto-serif-kr)" : "var(--font-noto-serif)";
-
-  const paragraphsHtml = content.paragraphs
-    .map((para) => `<p>${escapeHtml(para)}</p>`)
+  
+  // Format paragraphs as verses (for Stage 1, we'll format them nicely)
+  // Each paragraph becomes a verse row
+  const versesHtml = content.paragraphs
+    .map((para, idx) => {
+      const verseNum = idx + 1; // For now, sequential numbering
+      return `
+        <div class="verse-row">
+          <div class="verse-num">${verseNum}</div>
+          <div class="verse-text">${escapeHtml(para)}</div>
+        </div>`;
+    })
     .join("\n      ");
-
-  return `<section class="page">
-    <div class="scripture-page" style="
-      margin-left: ${scripturePage.marginLeft}pt;
-      margin-right: ${scripturePage.marginRight}pt;
-      margin-top: ${scripturePage.marginTop}pt;
-      margin-bottom: ${scripturePage.marginBottom}pt;
-      font-family: ${fontFamily};
-    ">
-      ${paragraphsHtml}
+  
+  const debugStyle = isDebug ? 'outline: 1px solid red;' : '';
+  const panelDebugStyle = isDebug ? 'outline: 1px solid red; outline-offset: -1px;' : '';
+  
+  return `<section class="page scripture-page-wrapper">
+    <div class="chapter-badge">${chapterNumber}</div>
+    <div class="scripture-panel" style="${panelDebugStyle}">
+      <div class="scripture-content" style="font-family: ${fontFamily};">
+        ${versesHtml}
+      </div>
     </div>
   </section>`;
 }
@@ -82,7 +107,7 @@ function renderCoverPage(language: string): string {
   const fontFamily = language === "ko" ? "var(--font-noto-serif-kr)" : "var(--font-noto-serif)";
   const title = language === "ko" ? "성경 필사 노트북" : "Bible Transcription Notebook";
   const subtitle = language === "ko" ? "노트북 앱으로 생성됨" : "Generated by the Notebook App";
-
+  
   return `<section class="page">
     <div class="cover-page" style="font-family: ${fontFamily};">
       <h1>${escapeHtml(title)}</h1>
@@ -94,9 +119,16 @@ function renderCoverPage(language: string): string {
 export function renderNotebookHtml(request: NotebookRequest): string {
   const template = getTemplate(request.templateId);
   const { pageSize } = template;
-
+  
+  // Check if we're in debug mode
+  const isDebug = process.env.NODE_ENV === "development";
+  
+  // Page dimensions in inches (7.75in x 10.75in)
+  const pageWidthIn = ptToIn(pageSize.widthPt); // Should be 7.75
+  const pageHeightIn = ptToIn(pageSize.heightPt); // Should be 10.75
+  
   const pages: string[] = [];
-
+  
   // Front matter
   for (const fm of request.frontMatter) {
     if (fm === "blank") {
@@ -105,37 +137,36 @@ export function renderNotebookHtml(request: NotebookRequest): string {
       pages.push(renderCoverPage(request.language));
     }
   }
-
+  
   // Sections
   for (const section of request.sections) {
     // Title page
     pages.push(renderTitlePage(section.title, request.language));
-
+    
     // Scripture page + writing page pairs
     for (const pageContent of section.pages) {
-      pages.push(renderScripturePage(pageContent, template, request.language));
-      pages.push(renderWritingPage(template));
+      // For Stage 1, use chapter number 1 as placeholder
+      // Later this will be derived from the first verse on the page
+      pages.push(renderScripturePage(pageContent, template, request.language, 1, isDebug));
+      pages.push(renderWritingPage(template, isDebug));
     }
   }
-
+  
   // Back matter
   for (const bm of request.backMatter) {
     if (bm === "blank") {
       pages.push(renderBlankPage());
     }
   }
-
-  const widthIn = pageSize.widthPt / 72;
-  const heightIn = pageSize.heightPt / 72;
-
+  
   // Load fonts as base64 data URIs
   const fontDir = path.join(process.cwd(), "node_modules");
   const notoSerifPath = path.join(fontDir, "@fontsource/noto-serif/files/noto-serif-latin-400-normal.woff2");
   const notoSerifKrPath = path.join(fontDir, "@fontsource/noto-serif-kr/files/noto-serif-kr-korean-400-normal.woff2");
-
+  
   let notoSerifBase64 = "";
   let notoSerifKrBase64 = "";
-
+  
   try {
     if (fs.existsSync(notoSerifPath)) {
       const fontBuffer = fs.readFileSync(notoSerifPath);
@@ -144,7 +175,7 @@ export function renderNotebookHtml(request: NotebookRequest): string {
   } catch (error) {
     console.warn("Failed to load Noto Serif font:", error);
   }
-
+  
   try {
     if (fs.existsSync(notoSerifKrPath)) {
       const fontBuffer = fs.readFileSync(notoSerifKrPath);
@@ -153,7 +184,12 @@ export function renderNotebookHtml(request: NotebookRequest): string {
   } catch (error) {
     console.warn("Failed to load Noto Serif KR font:", error);
   }
-
+  
+  const debugStyle = isDebug ? `
+    .page { outline: 1px solid red; }
+    .scripture-panel { outline: 1px solid red; }
+  ` : '';
+  
   return `<!DOCTYPE html>
 <html lang="${request.language}">
 <head>
@@ -179,44 +215,44 @@ export function renderNotebookHtml(request: NotebookRequest): string {
       src: url(data:font/woff2;base64,${notoSerifKrBase64}) format('woff2');
     }
     ` : ""}
-
+    
     :root {
       --font-noto-serif: ${notoSerifBase64 ? "'Noto Serif', " : ""}serif;
       --font-noto-serif-kr: ${notoSerifKrBase64 ? "'Noto Serif KR', " : ""}serif;
     }
-
+    
     @page {
-      size: ${widthIn}in ${heightIn}in;
+      size: ${pageWidthIn}in ${pageHeightIn}in;
       margin: 0;
     }
-
+    
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
-
+    
     body {
       font-family: var(--font-noto-serif);
       font-size: 12pt;
       line-height: 1.6;
       color: #000;
     }
-
+    
     .page {
-      width: ${pageSize.widthPt}pt;
-      height: ${pageSize.heightPt}pt;
+      width: ${pageWidthIn}in;
+      height: ${pageHeightIn}in;
       page-break-after: always;
       position: relative;
-      overflow: hidden;
       background: #fff;
+      overflow: visible;
     }
-
+    
     .blank-page {
       width: 100%;
       height: 100%;
     }
-
+    
     .cover-page {
       width: 100%;
       height: 100%;
@@ -226,18 +262,18 @@ export function renderNotebookHtml(request: NotebookRequest): string {
       justify-content: center;
       text-align: center;
     }
-
+    
     .cover-page h1 {
       font-size: 32pt;
       margin-bottom: 20pt;
       font-weight: 400;
     }
-
+    
     .cover-page p {
       font-size: 14pt;
       color: #666;
     }
-
+    
     .title-page {
       width: 100%;
       height: 100%;
@@ -245,42 +281,95 @@ export function renderNotebookHtml(request: NotebookRequest): string {
       align-items: center;
       justify-content: center;
     }
-
+    
     .title-page h1 {
       font-size: 48pt;
       font-weight: 400;
       text-align: center;
       letter-spacing: 0.1em;
     }
-
-    .scripture-page {
-      width: 100%;
-      height: 100%;
-      font-size: 11pt;
-      line-height: 1.8;
-      text-align: justify;
-    }
-
-    .scripture-page p {
-      margin-bottom: 12pt;
-      text-indent: 0;
-    }
-
-    .scripture-page p:first-child {
-      margin-top: 0;
-    }
-
+    
+    /* Writing page */
     .writing-page {
       width: 100%;
       height: 100%;
       position: relative;
     }
-
+    
     .writing-page svg {
       display: block;
       width: 100%;
       height: 100%;
     }
+    
+    /* Scripture page */
+    .scripture-page-wrapper {
+      background: #BDBDBD;
+    }
+    
+    .scripture-panel {
+      position: absolute;
+      left: 0.5in;
+      right: 0.5in;
+      top: 0.45in;
+      bottom: 0.55in;
+      background: #fff;
+      border-radius: 0.5in;
+      padding: 0.35in 0.4in 0.4in 0.4in;
+      overflow: visible;
+    }
+    
+    .chapter-badge {
+      position: absolute;
+      left: 0.38in;
+      top: 0.38in;
+      width: 0.45in;
+      height: 0.45in;
+      background: #000;
+      border-radius: 0.12in;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: bold;
+      font-size: 18pt;
+      z-index: 10;
+    }
+    
+    .scripture-content {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+    
+    .verse-row {
+      display: grid;
+      grid-template-columns: 0.35in 1fr;
+      column-gap: 0.18in;
+      margin-bottom: 0.4em;
+    }
+    
+    .verse-num {
+      text-align: right;
+      font-size: 12pt;
+      font-weight: normal;
+      padding-top: 0.1em;
+    }
+    
+    .verse-text {
+      text-align: left;
+      font-size: 12pt;
+      line-height: 1.6;
+      overflow-wrap: break-word;
+      word-break: normal;
+      overflow: visible;
+    }
+    
+    .verse-row:last-child .verse-text {
+      margin-bottom: 0;
+    }
+    
+    ${debugStyle}
   </style>
 </head>
 <body>

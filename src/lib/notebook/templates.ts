@@ -1,5 +1,20 @@
 import { Template } from "./types";
 
+/**
+ * Convert points to inches (1 inch = 72 points)
+ */
+export function ptToIn(pt: number): number {
+  return pt / 72;
+}
+
+/**
+ * Convert inches to CSS pixels (1 inch = 96 pixels at 96dpi)
+ * Note: Prefer using "in" units directly in CSS when possible
+ */
+export function inToCssPx(inches: number): number {
+  return inches * 96;
+}
+
 export const templates: Record<string, Template> = {
   "church-standard": {
     id: "church-standard",
