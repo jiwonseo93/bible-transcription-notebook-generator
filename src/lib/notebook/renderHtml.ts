@@ -117,15 +117,16 @@ function renderCoverPage(language: string): string {
 }
 
 export function renderNotebookHtml(request: NotebookRequest): string {
-  const template = getTemplate(request.templateId);
-  const { pageSize } = template;
-  
-  // Check if we're in debug mode
-  const isDebug = process.env.NODE_ENV === "development";
-  
-  // Page dimensions in inches (7.75in x 10.75in)
-  const pageWidthIn = ptToIn(pageSize.widthPt); // Should be 7.75
-  const pageHeightIn = ptToIn(pageSize.heightPt); // Should be 10.75
+  try {
+    const template = getTemplate(request.templateId);
+    const { pageSize } = template;
+    
+    // Check if we're in debug mode (default to false if NODE_ENV is not set)
+    const isDebug = typeof process !== "undefined" && process.env?.NODE_ENV === "development";
+    
+    // Page dimensions in inches (7.75in x 10.75in)
+    const pageWidthIn = ptToIn(pageSize.widthPt); // Should be 7.75
+    const pageHeightIn = ptToIn(pageSize.heightPt); // Should be 10.75
   
   const pages: string[] = [];
   
@@ -376,4 +377,8 @@ export function renderNotebookHtml(request: NotebookRequest): string {
   ${pages.join("\n  ")}
 </body>
 </html>`;
+  } catch (error) {
+    console.error("Error in renderNotebookHtml:", error);
+    throw new Error(`Failed to render notebook HTML: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }

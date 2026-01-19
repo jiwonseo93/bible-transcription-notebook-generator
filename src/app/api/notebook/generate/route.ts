@@ -23,12 +23,31 @@ export async function POST(request: NextRequest) {
     }
 
     // Render HTML
-    const html = renderNotebookHtml(body);
+    let html: string;
+    try {
+      html = renderNotebookHtml(body);
+    } catch (error) {
+      console.error("Error rendering HTML:", error);
+      return NextResponse.json(
+        { error: "Failed to render HTML", details: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined },
+        { status: 500 }
+      );
+    }
 
     // Generate PDF using Playwright
-    const browser = await chromium.launch({
-      headless: true,
-    });
+    let browser;
+    try {
+      browser = await chromium.launch({
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      });
+    } catch (error) {
+      console.error("Error launching browser:", error);
+      return NextResponse.json(
+        { error: "Failed to launch browser", details: error instanceof Error ? error.message : String(error) },
+        { status: 500 }
+      );
+    }
 
     try {
       const page = await browser.newPage();
@@ -61,13 +80,14 @@ export async function POST(request: NextRequest) {
         },
       });
     } catch (error) {
-      await browser.close();
+      await browser?.close();
+      console.error("Error generating PDF:", error);
       throw error;
     }
   } catch (error) {
     console.error("Error generating PDF:", error);
     return NextResponse.json(
-      { error: "Failed to generate PDF", details: error instanceof Error ? error.message : String(error) },
+      { error: "Failed to generate PDF", details: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined },
       { status: 500 }
     );
   }
