@@ -1,25 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 import { NotebookRequest } from "@/lib/notebook/types";
 import { renderNotebookHtml } from "@/lib/notebook/renderHtml";
-
-// Use puppeteer-core for serverless, puppeteer for local dev
-let puppeteer: any;
-let chromium: any;
-
-if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-  // Serverless environment
-  puppeteer = require("puppeteer-core");
-  chromium = require("@sparticuz/chromium");
-} else {
-  // Local development - use regular puppeteer
-  try {
-    puppeteer = require("puppeteer");
-  } catch {
-    // Fallback to puppeteer-core if puppeteer not installed
-    puppeteer = require("puppeteer-core");
-    chromium = require("@sparticuz/chromium");
-  }
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -52,33 +35,52 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate PDF using Puppeteer
+    // Generate PDF using Puppeteer with serverless Chromium
     let browser;
     try {
       const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
       
-      if (isServerless && chromium) {
-        // Serverless environment - use @sparticuz/chromium
+      if (isServerless) {
+        // Serverless environment (Vercel) - use @sparticuz/chromium
+        console.log("Using serverless Chromium on Vercel");
         chromium.setGraphicsMode(false);
         const executablePath = await chromium.executablePath();
         
         browser = await puppeteer.launch({
-          args: chromium.args,
+          args: [...chromium.args, "--hide-scrollbars", "--disable-web-security"],
           defaultViewport: chromium.defaultViewport,
-          executablePath: executablePath,
+          executablePath,
           headless: chromium.headless,
         });
       } else {
-        // Local development - use regular Puppeteer
+        // Local development - try to use system Chrome/Chromium
+        console.log("Using local Puppeteer");
+        // Try to find Chrome in common locations
+        const possiblePaths = [
+          process.env.PUPPETEER_EXECUTABLE_PATH,
+          "/usr/bin/google-chrome",
+          "/usr/bin/chromium-browser",
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        ].filter(Boolean);
+        
         browser = await puppeteer.launch({
           headless: true,
           args: ["--no-sandbox", "--disable-setuid-sandbox"],
+          executablePath: possiblePaths[0],
         });
       }
     } catch (error) {
       console.error("Error launching browser:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error("Error stack:", errorStack);
       return NextResponse.json(
-        { error: "Failed to launch browser", details: error instanceof Error ? error.message : String(error) },
+        { 
+          error: "Failed to launch browser", 
+          details: errorMessage,
+          stack: errorStack,
+          isServerless: !!process.env.VERCEL,
+        },
         { status: 500 }
       );
     }
