@@ -43,14 +43,31 @@ export async function POST(request: NextRequest) {
       if (isServerless) {
         // Serverless environment (Vercel) - use @sparticuz/chromium
         console.log("Using serverless Chromium on Vercel");
-        const executablePath = await chromium.executablePath();
+        console.log("VERCEL env:", !!process.env.VERCEL);
         
+        let executablePath: string;
+        try {
+          executablePath = await chromium.executablePath();
+          console.log("Chromium executable path obtained");
+        } catch (error) {
+          console.error("Failed to get chromium executable path:", error);
+          throw new Error(`Failed to get Chromium executable path: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        
+        console.log("Launching browser with executablePath:", executablePath);
         browser = await puppeteer.launch({
-          args: chromium.args,
+          args: [
+            ...chromium.args,
+            "--hide-scrollbars",
+            "--disable-web-security",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-site-isolation-trials",
+          ],
           defaultViewport: { width: 1920, height: 1080 },
           executablePath,
           headless: true,
         });
+        console.log("Browser launched successfully");
       } else {
         // Local development - try to use system Chrome/Chromium
         console.log("Using local Puppeteer");
