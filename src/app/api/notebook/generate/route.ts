@@ -46,10 +46,10 @@ export async function POST(request: NextRequest) {
         const executablePath = await chromium.executablePath();
         
         browser = await puppeteer.launch({
-          args: [...chromium.args, "--hide-scrollbars", "--disable-web-security"],
-          defaultViewport: chromium.defaultViewport,
+          args: chromium.args,
+          defaultViewport: { width: 1920, height: 1080 },
           executablePath,
-          headless: chromium.headless,
+          headless: true,
         });
       } else {
         // Local development - try to use system Chrome/Chromium
