@@ -1,7 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { chromium } from "playwright";
 import { NotebookRequest } from "@/lib/notebook/types";
 import { renderNotebookHtml } from "@/lib/notebook/renderHtml";
+
+// Use puppeteer-core for serverless, puppeteer for local dev
+let puppeteer: any;
+let chromium: any;
+
+if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  // Serverless environment
+  puppeteer = require("puppeteer-core");
+  chromium = require("@sparticuz/chromium");
+} else {
+  // Local development - use regular puppeteer
+  try {
+    puppeteer = require("puppeteer");
+  } catch {
+    // Fallback to puppeteer-core if puppeteer not installed
+    puppeteer = require("puppeteer-core");
+    chromium = require("@sparticuz/chromium");
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,13 +52,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate PDF using Playwright
+    // Generate PDF using Puppeteer
     let browser;
     try {
-      browser = await chromium.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      });
+      const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+      
+      if (isServerless && chromium) {
+        // Serverless environment - use @sparticuz/chromium
+        chromium.setGraphicsMode(false);
+        const executablePath = await chromium.executablePath();
+        
+        browser = await puppeteer.launch({
+          args: chromium.args,
+          defaultViewport: chromium.defaultViewport,
+          executablePath: executablePath,
+          headless: chromium.headless,
+        });
+      } else {
+        // Local development - use regular Puppeteer
+        browser = await puppeteer.launch({
+          headless: true,
+          args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        });
+      }
     } catch (error) {
       console.error("Error launching browser:", error);
       return NextResponse.json(
@@ -54,12 +88,11 @@ export async function POST(request: NextRequest) {
 
       // Set content
       await page.setContent(html, {
-        waitUntil: "networkidle",
+        waitUntil: "networkidle0",
       });
 
       // Generate PDF
       const pdfBuffer = await page.pdf({
-        format: undefined, // Use custom size from @page
         printBackground: true,
         preferCSSPageSize: true,
         margin: {
@@ -73,7 +106,7 @@ export async function POST(request: NextRequest) {
       await browser.close();
 
       // Return PDF
-      return new NextResponse(pdfBuffer as any, {
+      return new NextResponse(pdfBuffer, {
         headers: {
           "Content-Type": "application/pdf",
           "Content-Disposition": 'attachment; filename="notebook-sample.pdf"',
