@@ -106,8 +106,9 @@ export async function POST(request: NextRequest) {
 
       await browser.close();
 
-      // Return PDF
-      return new NextResponse(pdfBuffer, {
+      // Return PDF - convert Buffer to Uint8Array for NextResponse
+      const pdfArray = new Uint8Array(pdfBuffer);
+      return new NextResponse(pdfArray, {
         headers: {
           "Content-Type": "application/pdf",
           "Content-Disposition": 'attachment; filename="notebook-sample.pdf"',
