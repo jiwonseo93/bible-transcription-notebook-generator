@@ -2,13 +2,23 @@ export type Language = "en" | "ko";
 
 export type TemplateId = "church-standard";
 
+export type Verse = {
+  chapter: number;
+  verse: number;
+  text: string;
+};
+
+// Legacy support for Stage 1
 export type PageContent = {
   paragraphs: string[];
 };
 
 export type Section = {
   title: string;
-  pages: PageContent[];
+  // Stage 1: pages array (pre-split)
+  pages?: PageContent[];
+  // Stage 2: verses array (auto-paginated)
+  verses?: Verse[];
 };
 
 export type FrontMatterType = "blank" | "cover";

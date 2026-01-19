@@ -1,4 +1,4 @@
-import { NotebookRequest, Template } from "./types";
+import { NotebookRequest, Template, Verse } from "./types";
 import { getTemplate, ptToIn } from "./templates";
 import path from "path";
 import fs from "fs";
@@ -59,6 +59,41 @@ function renderWritingPage(template: Template, isDebug: boolean): string {
   </section>`;
 }
 
+// Render scripture page from verses (Stage 2)
+function renderScripturePageFromVerses(verses: Verse[], template: Template, language: string, isDebug: boolean): string {
+  const fontFamily = language === "ko" ? "var(--font-noto-serif-kr)" : "var(--font-noto-serif)";
+  
+  // Chapter number from first verse
+  const chapterNumber = verses.length > 0 ? verses[0].chapter : 1;
+  
+  const versesHtml = verses
+    .map((v) => {
+      const isContinuation = v.text.startsWith("(cont.)");
+      const displayNum = isContinuation ? "" : v.verse.toString();
+      const displayText = isContinuation ? v.text.replace(/^\(cont\.\)\s*/, "") : v.text;
+      
+      return `
+        <div class="verse-row">
+          <div class="verse-num">${escapeHtml(displayNum)}</div>
+          <div class="verse-text">${escapeHtml(displayText)}</div>
+        </div>`;
+    })
+    .join("\n      ");
+  
+  const debugStyle = isDebug ? 'outline: 1px solid red;' : '';
+  const panelDebugStyle = isDebug ? 'outline: 1px solid red; outline-offset: -1px;' : '';
+  
+  return `<section class="page scripture-page-wrapper">
+    <div class="chapter-badge">${chapterNumber}</div>
+    <div class="scripture-panel" style="${panelDebugStyle}" id="scripture-panel">
+      <div class="scripture-content" style="font-family: ${fontFamily};" id="scripture-content">
+        ${versesHtml}
+      </div>
+    </div>
+  </section>`;
+}
+
+// Legacy: Render scripture page from paragraphs (Stage 1)
 function renderScripturePage(content: { paragraphs: string[] }, template: Template, language: string, chapterNumber: number, isDebug: boolean): string {
   const fontFamily = language === "ko" ? "var(--font-noto-serif-kr)" : "var(--font-noto-serif)";
   
@@ -80,8 +115,8 @@ function renderScripturePage(content: { paragraphs: string[] }, template: Templa
   
   return `<section class="page scripture-page-wrapper">
     <div class="chapter-badge">${chapterNumber}</div>
-    <div class="scripture-panel" style="${panelDebugStyle}">
-      <div class="scripture-content" style="font-family: ${fontFamily};">
+    <div class="scripture-panel" style="${panelDebugStyle}" id="scripture-panel">
+      <div class="scripture-content" style="font-family: ${fontFamily};" id="scripture-content">
         ${versesHtml}
       </div>
     </div>
@@ -144,12 +179,14 @@ export function renderNotebookHtml(request: NotebookRequest): string {
     // Title page
     pages.push(renderTitlePage(section.title, request.language));
     
-    // Scripture page + writing page pairs
-    for (const pageContent of section.pages) {
-      // For Stage 1, use chapter number 1 as placeholder
-      // Later this will be derived from the first verse on the page
-      pages.push(renderScripturePage(pageContent, template, request.language, 1, isDebug));
-      pages.push(renderWritingPage(template, isDebug));
+    // Scripture page + writing page pairs (Stage 1 legacy format)
+    if (section.pages) {
+      for (const pageContent of section.pages) {
+        // For Stage 1, use chapter number 1 as placeholder
+        // Later this will be derived from the first verse on the page
+        pages.push(renderScripturePage(pageContent, template, request.language, 1, isDebug));
+        pages.push(renderWritingPage(template, isDebug));
+      }
     }
   }
   
@@ -379,6 +416,277 @@ export function renderNotebookHtml(request: NotebookRequest): string {
 </html>`;
   } catch (error) {
     console.error("Error in renderNotebookHtml:", error);
+    throw new Error(`Failed to render notebook HTML: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Render notebook HTML from paginated verses (Stage 2)
+ * Verses are already paginated by paginateVerses()
+ */
+export function renderNotebookHtmlFromPaginatedVerses(
+  request: NotebookRequest,
+  paginatedVerses: Array<Array<Array<Verse>>>, // sections -> pages -> verses
+  isDebug: boolean
+): string {
+  try {
+    const template = getTemplate(request.templateId);
+    const { pageSize } = template;
+    
+    // Page dimensions in inches (7.75in x 10.75in)
+    const pageWidthIn = ptToIn(pageSize.widthPt);
+    const pageHeightIn = ptToIn(pageSize.heightPt);
+  
+    const pages: string[] = [];
+  
+    // Front matter
+    for (const fm of request.frontMatter) {
+      if (fm === "blank") {
+        pages.push(renderBlankPage());
+      } else if (fm === "cover") {
+        pages.push(renderCoverPage(request.language));
+      }
+    }
+  
+    // Sections
+    for (let i = 0; i < request.sections.length; i++) {
+      const section = request.sections[i];
+      const sectionVersesPages = paginatedVerses[i] || [];
+      
+      // Title page
+      pages.push(renderTitlePage(section.title, request.language));
+      
+      // Scripture page + writing page pairs
+      for (const pageVerses of sectionVersesPages) {
+        pages.push(renderScripturePageFromVerses(pageVerses, template, request.language, isDebug));
+        pages.push(renderWritingPage(template, isDebug));
+      }
+    }
+  
+    // Back matter
+    for (const bm of request.backMatter) {
+      if (bm === "blank") {
+        pages.push(renderBlankPage());
+      }
+    }
+  
+    // Load fonts as base64 data URIs
+    const fontDir = path.join(process.cwd(), "node_modules");
+    const notoSerifPath = path.join(fontDir, "@fontsource/noto-serif/files/noto-serif-latin-400-normal.woff2");
+    const notoSerifKrPath = path.join(fontDir, "@fontsource/noto-serif-kr/files/noto-serif-kr-korean-400-normal.woff2");
+  
+    let notoSerifBase64 = "";
+    let notoSerifKrBase64 = "";
+  
+    try {
+      if (typeof process !== "undefined") {
+        if (fs.existsSync(notoSerifPath)) {
+          const fontBuffer = fs.readFileSync(notoSerifPath);
+          notoSerifBase64 = fontBuffer.toString("base64");
+        }
+        
+        if (fs.existsSync(notoSerifKrPath)) {
+          const fontBuffer = fs.readFileSync(notoSerifKrPath);
+          notoSerifKrBase64 = fontBuffer.toString("base64");
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to load fonts (will use fallback):", error instanceof Error ? error.message : String(error));
+    }
+  
+    const debugStyle = isDebug ? `
+    .page { outline: 1px solid red; }
+    .scripture-panel { outline: 1px solid red; }
+  ` : '';
+  
+    return `<!DOCTYPE html>
+<html lang="${request.language}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bible Transcription Notebook</title>
+  <style>
+    ${notoSerifBase64 ? `
+    @font-face {
+      font-family: 'Noto Serif';
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url(data:font/woff2;base64,${notoSerifBase64}) format('woff2');
+    }
+    ` : ""}
+    ${notoSerifKrBase64 ? `
+    @font-face {
+      font-family: 'Noto Serif KR';
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url(data:font/woff2;base64,${notoSerifKrBase64}) format('woff2');
+    }
+    ` : ""}
+    
+    :root {
+      --font-noto-serif: ${notoSerifBase64 ? "'Noto Serif', " : ""}serif;
+      --font-noto-serif-kr: ${notoSerifKrBase64 ? "'Noto Serif KR', " : ""}serif;
+    }
+    
+    @page {
+      size: ${pageWidthIn}in ${pageHeightIn}in;
+      margin: 0;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: var(--font-noto-serif);
+      font-size: 12pt;
+      line-height: 1.6;
+      color: #000;
+    }
+    
+    .page {
+      width: ${pageWidthIn}in;
+      height: ${pageHeightIn}in;
+      page-break-after: always;
+      position: relative;
+      background: #fff;
+      overflow: visible;
+    }
+    
+    .blank-page {
+      width: 100%;
+      height: 100%;
+    }
+    
+    .cover-page {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    
+    .cover-page h1 {
+      font-size: 32pt;
+      margin-bottom: 20pt;
+      font-weight: 400;
+    }
+    
+    .cover-page p {
+      font-size: 14pt;
+      color: #666;
+    }
+    
+    .title-page {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .title-page h1 {
+      font-size: 48pt;
+      font-weight: 400;
+      text-align: center;
+      letter-spacing: 0.1em;
+    }
+    
+    /* Writing page */
+    .writing-page {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+    
+    .writing-page svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    
+    /* Scripture page */
+    .scripture-page-wrapper {
+      background: #BDBDBD;
+    }
+    
+    .scripture-panel {
+      position: absolute;
+      left: 0.5in;
+      right: 0.5in;
+      top: 0.45in;
+      bottom: 0.55in;
+      background: #fff;
+      border-radius: 0.5in;
+      padding: 0.35in 0.4in 0.4in 0.4in;
+      overflow: visible;
+    }
+    
+    .chapter-badge {
+      position: absolute;
+      left: 0.38in;
+      top: 0.38in;
+      width: 0.45in;
+      height: 0.45in;
+      background: #000;
+      border-radius: 0.12in;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: bold;
+      font-size: 18pt;
+      z-index: 10;
+    }
+    
+    .scripture-content {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+    
+    .verse-row {
+      display: grid;
+      grid-template-columns: 0.35in 1fr;
+      column-gap: 0.18in;
+      margin-bottom: 0.4em;
+    }
+    
+    .verse-num {
+      text-align: right;
+      font-size: 12pt;
+      font-weight: normal;
+      padding-top: 0.1em;
+    }
+    
+    .verse-text {
+      text-align: left;
+      font-size: 12pt;
+      line-height: 1.6;
+      overflow-wrap: break-word;
+      word-break: normal;
+      overflow: visible;
+    }
+    
+    .verse-row:last-child .verse-text {
+      margin-bottom: 0;
+    }
+    
+    ${debugStyle}
+  </style>
+</head>
+<body>
+  ${pages.join("\n  ")}
+</body>
+</html>`;
+  } catch (error) {
+    console.error("Error in renderNotebookHtmlFromPaginatedVerses:", error);
     throw new Error(`Failed to render notebook HTML: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

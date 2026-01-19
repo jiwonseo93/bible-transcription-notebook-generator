@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { NotebookRequest } from "@/lib/notebook/types";
-import { renderNotebookHtml } from "@/lib/notebook/renderHtml";
+import { renderNotebookHtml, renderNotebookHtmlFromPaginatedVerses } from "@/lib/notebook/renderHtml";
+import { paginateVerses } from "@/lib/notebook/paginateVerses";
+import { getTemplate } from "@/lib/notebook/templates";
 
 // Ensure Node.js runtime (not Edge)
 export const runtime = "nodejs";
@@ -44,21 +46,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Render HTML
-    let html: string;
-    try {
-      html = renderNotebookHtml(body);
-    } catch (error) {
-      console.error("Error rendering HTML:", error);
-      return NextResponse.json(
-        { error: "Failed to render HTML", details: error instanceof Error ? error.message : String(error) },
-        { status: 500 }
-      );
-    }
+    // Check if we need pagination (Stage 2) or legacy pages (Stage 1)
+    const needsPagination = body.sections.some((section) => section.verses && section.verses.length > 0);
 
-    // Generate PDF using Puppeteer
+    // Generate PDF using Puppeteer - launch browser once
     let browser;
     const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const isDebug = process.env.NODE_ENV === "development" || request.nextUrl.searchParams.get("debug") === "true";
     
     try {
       if (isServerless && chromium) {
@@ -103,8 +97,39 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-
+    
     try {
+      // Paginate verses if needed (Stage 2)
+      let html: string;
+      
+      if (needsPagination) {
+        // Stage 2: Paginate verses
+        const template = getTemplate(body.templateId);
+        const paginatedVerses: Array<Array<Array<any>>> = [];
+        
+        for (const section of body.sections) {
+          if (section.verses && section.verses.length > 0) {
+            const pages = await paginateVerses({
+              browser,
+              template,
+              verses: section.verses,
+              language: body.language,
+              isDebug,
+            });
+            paginatedVerses.push(pages);
+          } else {
+            // Empty section
+            paginatedVerses.push([]);
+          }
+        }
+        
+        html = renderNotebookHtmlFromPaginatedVerses(body, paginatedVerses, isDebug);
+      } else {
+        // Stage 1: Legacy pages format
+        html = renderNotebookHtml(body);
+      }
+
+      try {
       const page = await browser.newPage();
 
       // Set content
@@ -136,17 +161,33 @@ export async function POST(request: NextRequest) {
           "Content-Disposition": 'attachment; filename="notebook-sample.pdf"',
         },
       });
+      } catch (error) {
+        await browser?.close();
+        console.error("Error generating PDF:", error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : undefined;
+        
+        return NextResponse.json(
+          { 
+            error: "Failed to generate PDF", 
+            details: errorMessage,
+            stack: errorStack,
+            diagnostics: {
+              nodeVersion: process.version,
+              platform: process.platform,
+              arch: process.arch,
+            }
+          },
+          { status: 500 }
+        );
+      }
     } catch (error) {
-      await browser?.close();
-      console.error("Error generating PDF:", error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorStack = error instanceof Error ? error.stack : undefined;
-      
+      // Handle browser launch errors
+      console.error("Error in PDF generation route:", error);
       return NextResponse.json(
         { 
           error: "Failed to generate PDF", 
-          details: errorMessage,
-          stack: errorStack,
+          details: error instanceof Error ? error.message : String(error),
           diagnostics: {
             nodeVersion: process.version,
             platform: process.platform,
@@ -157,6 +198,7 @@ export async function POST(request: NextRequest) {
       );
     }
   } catch (error) {
+    // Handle top-level errors
     console.error("Error in PDF generation route:", error);
     return NextResponse.json(
       { 
